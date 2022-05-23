@@ -1,0 +1,81 @@
+version: "3.9"
+services:
+  db:
+    image: postgres:14.1-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: exchange
+      POSTGRES_HOST: db
+    volumes:
+      - postgres_data:/var/lib/posgresql/data/
+    ports:
+      - "5434:5432"
+    restart: always
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  web:
+    build:
+      context: .
+      dockerfile: ./api_service/Dockerfile
+    environment:
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: exchange
+      DB_HOST: db
+    command: [sh, -c, "alembic upgrade head && cd /code
+                       && run uvicorn api_service.app.main:app
+                       --reload --host 0.0.0.0 --port 8000"]
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+  rabbit:
+    image: rabbitmq:3-management-alpine
+    ports:
+      - 5672:5672
+      - 15672:15672
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "localhost", "5672" ]
+      interval: 5s
+      timeout: 15s
+      retries: 1
+  celery:
+    build:
+      context: .
+      dockerfile: ./tasks_service/Dockerfile
+    environment:
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: exchange
+      DB_HOST: db
+      ALLOWED_VALUTES: "['CNY', 'EUR', 'USD']"
+      CB_URL: "https://www.cbr.ru/scripts/XML_daily.asp"
+      REQUEST_FREQUENCY: 60.0
+    command: [sh, -c, "celery -A tasks_service.app_code.tasks beat --loglevel=info"]
+    depends_on:
+      rabbit:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+  celery-flower:
+    image: gregsi/latest-celery-flower-docker:latest
+    environment:
+      - AMQP_USERNAME=guest
+      - AMQP_PASSWORD=guest
+      - AMQP_ADMIN_USERNAME=user
+      - AMQP_ADMIN_PASSWORD=bitnami
+      - AMQP_HOST=rabbit
+      - AMQP_PORT=5672
+      - AMQP_ADMIN_HOST=rabbit
+      - AMQP_ADMIN_PORT=15672
+      - FLOWER_BASIC_AUTH=user:test
+    ports:
+      - "5555:5555"
+
+volumes:
+  postgres_data:
